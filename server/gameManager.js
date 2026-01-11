@@ -361,22 +361,8 @@ class GameManager {
       });
     }
 
-    // include bullets so clients can render/update them
-    const bullets = this.bullets.map(b => ({
-      id: b.id,
-      x: b.x,
-      y: b.y,
-      velocityX: b.velocityX,
-      velocityY: b.velocityY,
-      ownerId: b.ownerId,
-      weapon: b.weapon,
-      range: b.range,
-      distanceTraveled: b.distanceTraveled,
-    }));
-
     return {
       players,
-      bullets,
       safeZone: this.safeZone,
       nextSafeZone: this.nextSafeZone,
       playersAlive: this.playersAlive,

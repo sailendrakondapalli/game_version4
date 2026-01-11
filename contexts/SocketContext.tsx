@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 
-const GAME_SERVER_URL = process.env.EXPO_PUBLIC_GAME_SERVER_URL || 'http://192.168.29.45:3001'||"https://game-version1-zmjt.onrender.com";
+const GAME_SERVER_URL = process.env.EXPO_PUBLIC_GAME_SERVER_URL || 'http://192.168.29.45:3001' || 'https://game-version1-zmjt.onrender.com';
 
 interface SocketContextType {
   socket: Socket | null;
