@@ -8,8 +8,17 @@ const config = require('./config');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: { origin: '*', methods: ['GET', 'POST'] },
+  cors: {
+    origin: [
+      "https://game-version4-31.onrender.com",
+      "http://localhost:19006",
+      "http://localhost:3000"
+    ],
+    methods: ["GET", "POST"],
+    credentials: true
+  }
 });
+
 
 app.use(cors());
 app.use(express.json());
@@ -209,7 +218,10 @@ function stopGameLoop(matchCode) {
   }
 }
 
-server.listen(config.PORT, '0.0.0.0', () => {
-  console.log(`✅ Game server running on port ${config.PORT}`);
+const PORT = process.env.PORT || config.PORT || 3001;
+
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`✅ Game server running on port ${PORT}`);
   console.log(`⏱ Tick rate: ${config.TICK_RATE} Hz`);
 });
+
