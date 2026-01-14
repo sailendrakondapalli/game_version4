@@ -236,5 +236,9 @@ const PORT = process.env.PORT || config.PORT || 3001;
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ Game server running on port ${PORT}`);
   console.log(`⏱ Tick rate: ${config.TICK_RATE} Hz`);
+<<<<<<< HEAD
 });
 
+=======
+});
+>>>>>>> 0e660f4 (mycommit)
