@@ -36,6 +36,7 @@
     "jsonwebtoken": "^9.0.2",
     "lucide-react-native": "^0.544.0",
     "phaser": "^3.60.0",
+    "phaser3-rex-plugins": "^1.80.17",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-native": "0.81.4",

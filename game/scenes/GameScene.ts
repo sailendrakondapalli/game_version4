@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { Socket } from 'socket.io-client';
-import { GAME_CONFIG } from '../config';
+import { GAME_CONFIG } from '../config'; // Ensure the updated GAME_CONFIG is imported
+import VirtualJoystick from '../../src/plugins/VirtualJoystick';
 
 interface PlayerSprite {
   container: Phaser.GameObjects.Container;
@@ -38,6 +39,11 @@ export class GameScene extends Phaser.Scene {
   private moveVector = { x: 0, y: 0 };
   private lastMoveTime = 0;
 
+  private guns: Phaser.GameObjects.Sprite[] = [];
+  private bloodKits: Phaser.GameObjects.Sprite[] = [];
+
+  private joystick!: VirtualJoystick;
+
   constructor() {
     super({ key: 'GameScene' });
   }
@@ -60,12 +66,40 @@ export class GameScene extends Phaser.Scene {
     this.setupSocketListeners();
     this.createHUD();
 
+    this.spawnGuns();
+    this.spawnBloodKits();
+
     this.time.addEvent({
       delay: 16,
       callback: this.gameLoop,
       callbackScope: this,
       loop: true,
     });
+
+    // Add virtual joystick for mobile controls
+if (this.sys.game.device.input.touch) {
+  this.joystick = new VirtualJoystick(this, {
+    x: 120,
+    y: this.cameras.main.height - 120,
+    radius: 50,
+  });
+
+  this.joystick.start();
+  this.joystick.on('update', this.handleJoystick.bind(this));
+  this.scale.on('resize', (size: Phaser.Structs.Size) => {
+  if (this.joystick && (this.joystick as any).base && (this.joystick as any).thumb) {
+    const x = 120;
+    const y = size.height - 120;
+
+    (this.joystick as any).base.setPosition(x, y);
+    (this.joystick as any).thumb.setPosition(x, y);
+  }
+});
+
+}
+
+
+
   }
 
   createMap() {
@@ -154,6 +188,44 @@ export class GameScene extends Phaser.Scene {
       this.updatePlayers(state.players);
       this.updateSafeZone(state.safeZone, state.nextSafeZone);
       this.playersAliveText.setText(`Alive: ${state.playersAlive}`);
+      // Sync blood kits with server state
+if (state.healthKits) {
+  // Remove missing kits
+  this.bloodKits = this.bloodKits.filter((clientKit) => {
+    const exists = state.healthKits.some(
+      (serverKit: any) =>
+        Phaser.Math.Distance.Between(clientKit.x, clientKit.y, serverKit.x, serverKit.y) < 5
+    );
+
+    if (!exists) {
+      clientKit.getData('label')?.destroy();
+      clientKit.destroy();
+    }
+    return exists;
+  });
+
+  // Add new kits from server
+  state.healthKits.forEach((kit: any) => {
+    const alreadyExists = this.bloodKits.some(
+      k => Phaser.Math.Distance.Between(k.x, k.y, kit.x, kit.y) < 5
+    );
+
+    if (!alreadyExists) {
+      const bloodKit = this.add.sprite(kit.x, kit.y, 'bloodKit');
+      const label = this.add.text(kit.x, kit.y + 20, 'Health Kit', {
+        fontSize: '12px',
+        color: '#fff',
+        backgroundColor: '#000',
+        padding: { x: 4, y: 2 },
+      }).setOrigin(0.5);
+
+      bloodKit.setData('label', label);
+      this.bloodKits.push(bloodKit);
+    }
+  });
+}
+
+
     });
 
     this.socket.on('playerShot', (data: any) => {
@@ -195,6 +267,7 @@ export class GameScene extends Phaser.Scene {
     };
 
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      console.log('Pointer down event triggered:', pointer);
       this.handleShoot(pointer);
     });
 
@@ -205,25 +278,33 @@ export class GameScene extends Phaser.Scene {
     this.keys.R.on('down', () => this.socket.emit('playerReload'));
   }
 
-  handleShoot(pointer: Phaser.Input.Pointer) {
-    const player = this.players.get(this.playerId);
-    if (!player) return;
+handleShoot(pointer: Phaser.Input.Pointer) {
+  if (this.joystick && (this.joystick.forceX !== 0 || this.joystick.forceY !== 0)) return;
 
-    const world = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
-    const angle = Phaser.Math.Angle.Between(
-      player.container.x,
-      player.container.y,
-      world.x,
-      world.y
-    );
+  const player = this.players.get(this.playerId);
+  if (!player || !player.data.isAlive) return;
 
-    this.socket.emit('playerShoot', { angle });
-  }
+ const worldX = pointer.worldX;
+const worldY = pointer.worldY;
+
+const angle = Phaser.Math.Angle.Between(
+  player.container.x,
+  player.container.y,
+  worldX,
+  worldY
+);
+
+
+  this.socket.emit('playerShoot', { angle });
+}
+
 
   gameLoop() {
     this.handleMovement();
     this.updateBullets();
     this.updateHitMarkers();
+    this.checkGunPickup();
+    this.checkBloodKitPickup();
   }
 
   handleMovement() {
@@ -280,6 +361,23 @@ export class GameScene extends Phaser.Scene {
 
     player.weapon.setRotation(rotation);
     this.socket.emit('playerMove', { rotation });
+  }
+
+  handleJoystick() {
+    const forceX = this.joystick.forceX;
+    const forceY = this.joystick.forceY;
+
+    if (forceX !== 0 || forceY !== 0) {
+      const player = this.players.get(this.playerId);
+      if (player) {
+        const speed = GAME_CONFIG.PLAYER_SPEED;
+        const newX = player.container.x + forceX * speed * 0.016;
+        const newY = player.container.y + forceY * speed * 0.016;
+
+        player.container.setPosition(newX, newY);
+        this.socket.emit('playerMove', { x: newX, y: newY });
+      }
+    }
   }
 
   animateWalking(player: PlayerSprite, vx: number, vy: number) {
@@ -545,5 +643,114 @@ export class GameScene extends Phaser.Scene {
       this.nextSafeZoneGraphics.lineStyle(3, GAME_CONFIG.COLORS.NEXT_SAFE_ZONE, 0.5);
       this.nextSafeZoneGraphics.strokeCircle(nextZone.x, nextZone.y, nextZone.radius);
     }
+  }
+
+  spawnGuns() {
+    const gunTypes = [
+      { type: 'PISTOL', ammo: 12, range: 300 },
+      { type: 'AR', ammo: 30, range: 500 },
+      { type: 'SNIPER', ammo: 5, range: 800 },
+      { type: 'SHOTGUN', ammo: 8, range: 200 },
+    ];
+
+    for (let i = 0; i < 10; i++) {
+      const x = Math.random() * GAME_CONFIG.MAP_SIZE;
+      const y = Math.random() * GAME_CONFIG.MAP_SIZE;
+      const gunData = gunTypes[Math.floor(Math.random() * gunTypes.length)];
+
+      const gun = this.add.sprite(x, y, 'gun'); // Replace 'gun' with the actual texture key
+      gun.setData('type', gunData.type);
+      gun.setData('ammo', gunData.ammo);
+      gun.setData('range', gunData.range);
+
+      const gunLabel = this.add.text(x, y + 20, gunData.type, {
+        fontSize: '12px',
+        color: '#ffffff',
+        backgroundColor: '#000000',
+        padding: { x: 4, y: 2 },
+      });
+      gunLabel.setOrigin(0.5, 0.5);
+
+      gun.setData('label', gunLabel);
+      this.guns.push(gun);
+    }
+  }
+
+  spawnBloodKits() {
+    for (let i = 0; i < 5; i++) {
+      const x = Math.random() * GAME_CONFIG.MAP_SIZE;
+      const y = Math.random() * GAME_CONFIG.MAP_SIZE;
+
+      const bloodKit = this.add.sprite(x, y, 'bloodKit'); // Replace 'bloodKit' with the actual texture key
+
+      const bloodKitLabel = this.add.text(x, y + 20, 'Health Kit', {
+        fontSize: '12px',
+        color: '#ffffff',
+        backgroundColor: '#000000',
+        padding: { x: 4, y: 2 },
+      });
+      bloodKitLabel.setOrigin(0.5, 0.5);
+
+      bloodKit.setData('label', bloodKitLabel);
+      this.bloodKits.push(bloodKit);
+    }
+  }
+
+checkBloodKitPickup() {
+  const player = this.players.get(this.playerId);
+  if (!player || !player.data.isAlive) return;
+
+  this.bloodKits.forEach((bloodKit, index) => {
+    const distance = Phaser.Math.Distance.Between(
+      player.container.x,
+      player.container.y,
+      bloodKit.x,
+      bloodKit.y
+    );
+
+    if (distance < 25 && player.data.health < 100) {
+      this.socket.emit('pickupBloodKit');
+
+      
+    }
+  });
+}
+
+
+ checkGunPickup() {
+  const player = this.players.get(this.playerId);
+  if (!player) return;
+
+  this.guns.forEach((gun, index) => {
+    const distance = Phaser.Math.Distance.Between(
+      player.container.x,
+      player.container.y,
+      gun.x,
+      gun.y
+    );
+
+    if (distance < 20) {
+      const newGunType = gun.getData('type');
+
+      // Tell server to change weapon
+      this.socket.emit('changeWeapon', { weapon: newGunType });
+
+      // Remove picked gun from map
+      gun.getData('label')?.destroy();
+      gun.destroy();
+      this.guns.splice(index, 1);
+    }
+  });
+}
+
+
+  updateHUD() {
+    const player = this.players.get(this.playerId);
+    if (!player) return;
+
+    this.healthText.setText(`Health: ${Math.floor(player.data.health)}`);
+    this.ammoText.setText(`Ammo: ${player.data.ammo}`);
+    this.weaponText.setText(`Weapon: ${this.getWeaponName(player.data.weapon)}`);
+    this.killsText.setText(`Kills: ${player.data.kills || 0}`);
   }
 }

@@ -38,31 +38,23 @@ io.on('connection', (socket) => {
 
     console.log(`🎮 Quick match request from ${playerData.username}`);
 
-    // Default quick matches to 2 players
     const result = matchManager.findQuickMatch(socket.id, playerData, 2);
-
     if (!result.success) {
       socket.emit('matchError', { error: result.error });
       return;
     }
 
     socket.join(result.match.code);
-    console.log(`ℹ️ Emitting matchUpdate to room ${result.match.code}`, { players: result.match.players.length, status: result.match.status });
     io.to(result.match.code).emit('matchUpdate', result.match);
 
     const match = matchManager.getMatch(result.match.code);
-
-    // Start the match only when enough players have joined
     if (match.status === 'waiting' && match.players.size >= match.maxPlayers) {
-      console.log(`🚀 Starting match ${match.code}`);
       matchManager.startMatch(match.code);
       startGameLoop(match.code);
-      console.log(`🚀 Emitting matchStart for ${match.code}`);
       io.to(match.code).emit('matchStart', { matchCode: match.code });
     }
   });
 
-  // CREATE PRIVATE MATCH
   socket.on('createMatch', ({ playerData, maxPlayers } = {}) => {
     if (!playerData?.playerId || !playerData?.username) {
       socket.emit('matchError', { error: 'Invalid player data' });
@@ -70,18 +62,15 @@ io.on('connection', (socket) => {
     }
 
     const result = matchManager.createPrivateMatch(socket.id, playerData, maxPlayers || 2);
-
     if (!result.success) {
       socket.emit('matchError', { error: result.error });
       return;
     }
 
-    // join socket.io room for creator
     socket.join(result.code);
     socket.emit('matchCreated', { match: result.match, code: result.code });
   });
 
-  // JOIN MATCH BY CODE
   socket.on('joinMatch', ({ matchCode, playerData } = {}) => {
     if (!matchCode || !playerData?.playerId || !playerData?.username) {
       socket.emit('matchError', { error: 'Invalid join data' });
@@ -89,40 +78,34 @@ io.on('connection', (socket) => {
     }
 
     const result = matchManager.joinMatch(matchCode, socket.id, playerData);
-
     if (!result.success) {
       socket.emit('matchError', { error: result.error });
       return;
     }
 
     socket.join(result.match.code);
-    console.log(`ℹ️ Emitting matchUpdate to room ${result.match.code}`, { players: result.match.players.length, status: result.match.status });
     io.to(result.match.code).emit('matchUpdate', result.match);
 
     const match = matchManager.getMatch(result.match.code);
-    // If enough players have joined and match is still waiting, start it
     if (match && match.players.size >= match.maxPlayers && match.status === 'waiting') {
       matchManager.startMatch(match.code);
       startGameLoop(match.code);
-      // Emit updated lobby state and start event to all room members
+
       const updated = {
         code: match.code,
         players: Array.from(match.players.values()),
         maxPlayers: match.maxPlayers,
         status: match.status,
       };
-      console.log(`🚀 Emitting matchStart for ${match.code}`);
+
       io.to(match.code).emit('matchUpdate', updated);
       io.to(match.code).emit('matchStart', { matchCode: match.code });
-      // Also ensure the joining socket definitely receives the start event
       socket.emit('matchStart', { matchCode: match.code });
       return;
     }
 
-    // If match is already active ensure game loop is running and notify clients
     if (match && match.status === 'active') {
       startGameLoop(match.code);
-      console.log(`🚀 Emitting matchStart for already-active ${match.code}`);
       io.to(match.code).emit('matchStart', { matchCode: match.code });
     }
   });
@@ -152,6 +135,23 @@ io.on('connection', (socket) => {
     match.gameManager.handleReload(socket.id);
   });
 
+  // ⭐ ADDED — health kit pickup handler
+  socket.on('pickupBloodKit', () => {
+    const match = matchManager.getPlayerMatch(socket.id);
+    if (!match?.gameManager) return;
+
+    const result = match.gameManager.pickupHealthKit(socket.id);
+    if (result) {
+      io.to(match.code).emit('healthKitPicked', {
+        playerId: socket.id,
+        kitId: result.kitId,
+        health: result.health,
+      });
+      io.to(match.code).emit('gameState', match.gameManager.getGameState());
+
+    }
+  });
+
   socket.on('disconnect', () => {
     console.log(`🔴 Player disconnected: ${socket.id}`);
     const match = matchManager.leaveMatch(socket.id);
@@ -173,7 +173,6 @@ function startGameLoop(matchCode) {
     lastTime = now;
 
     const updateResult = match.gameManager.update(deltaTime);
-
     io.to(matchCode).emit('gameState', updateResult.gameState);
 
     if (updateResult.hits) {
@@ -190,18 +189,13 @@ function startGameLoop(matchCode) {
       });
     }
 
-    if (match.gameManager.started && match.gameManager.playersAlive === 1 && match.gameManager.totalPlayers > 1) {
+    if (match.gameManager.playersAlive === 1) {
       const winner = match.gameManager.getWinner();
       const results = matchManager.endMatch(matchCode, winner?.playerId);
 
-      io.to(matchCode).emit('matchEnd', {
-        winner,
-        results,
-      });
-
+      io.to(matchCode).emit('matchEnd', { winner, results });
       stopGameLoop(matchCode);
     }
-
   }, 1000 / config.TICK_RATE);
 
   gameLoops.set(matchCode, loop);

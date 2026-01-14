@@ -5,6 +5,7 @@ class GameManager {
     this.matchId = matchId;
     this.players = new Map();
     this.bullets = [];
+    this.healthKits = [];
     this.safeZone = {
       x: config.MAP_SIZE / 2,
       y: config.MAP_SIZE / 2,
@@ -31,6 +32,7 @@ class GameManager {
       armor: 0,
       isAlive: true,
       weapon: 'PISTOL',
+      weaponRange: config.WEAPONS.PISTOL.range,
       ammo: config.WEAPONS.PISTOL.magazineSize,
       maxAmmo: config.WEAPONS.PISTOL.magazineSize,
       isReloading: false,
@@ -42,6 +44,37 @@ class GameManager {
     });
     this.playersAlive++;
   }
+
+  spawnHealthKits(count = 5) {
+    this.healthKits = [];
+    const margin = 150;
+    for (let i = 0; i < count; i++) {
+      this.healthKits.push({
+        id: i + 1,
+        x: margin + Math.random() * (config.MAP_SIZE - margin * 2),
+        y: margin + Math.random() * (config.MAP_SIZE - margin * 2),
+      });
+    }
+  }
+
+ pickupHealthKit(socketId) {
+  const player = this.players.get(socketId);
+  if (!player || !player.isAlive || player.health >= 100) return null;
+
+  for (let i = 0; i < this.healthKits.length; i++) {
+    const kit = this.healthKits[i];
+    const dx = player.x - kit.x;
+    const dy = player.y - kit.y;
+
+    if (Math.sqrt(dx * dx + dy * dy) < 30) {
+      player.health = Math.min(100, player.health + 50);
+      this.healthKits.splice(i, 1);
+      return { kitId: kit.id, health: player.health };
+    }
+  }
+  return null;
+}
+
 
   removePlayer(socketId) {
     const player = this.players.get(socketId);
@@ -60,25 +93,15 @@ class GameManager {
       const dy = data.y - player.y;
       const distance = Math.sqrt(dx * dx + dy * dy);
 
-      if (distance > config.MAX_VELOCITY * 0.05) {
-        return;
-      }
+      if (distance > config.MAX_VELOCITY * 0.05) return;
 
       player.x = Math.max(0, Math.min(config.MAP_SIZE, data.x));
       player.y = Math.max(0, Math.min(config.MAP_SIZE, data.y));
     }
 
-    if (data.rotation !== undefined) {
-      player.rotation = data.rotation;
-    }
-
-    if (data.velocityX !== undefined) {
-      player.velocityX = data.velocityX;
-    }
-
-    if (data.velocityY !== undefined) {
-      player.velocityY = data.velocityY;
-    }
+    if (data.rotation !== undefined) player.rotation = data.rotation;
+    if (data.velocityX !== undefined) player.velocityX = data.velocityX;
+    if (data.velocityY !== undefined) player.velocityY = data.velocityY;
   }
 
   handleShoot(socketId, data) {
@@ -89,7 +112,6 @@ class GameManager {
     const weapon = config.WEAPONS[player.weapon];
 
     if (now - player.lastShootTime < weapon.fireRate) return null;
-
     if (player.ammo <= 0) {
       this.handleReload(socketId);
       return null;
@@ -109,13 +131,13 @@ class GameManager {
         id: ++this.lastBulletId,
         x: player.x,
         y: player.y,
-        angle: angle,
+        angle,
         velocityX: Math.cos(angle) * weapon.bulletSpeed,
         velocityY: Math.sin(angle) * weapon.bulletSpeed,
         ownerId: socketId,
         weapon: player.weapon,
         damage: weapon.damage,
-        range: weapon.range,
+        range: config.WEAPONS[player.weapon].range,
         distanceTraveled: 0,
       };
 
@@ -123,11 +145,7 @@ class GameManager {
       bullets.push(bullet);
     }
 
-    return {
-      playerId: socketId,
-      bullets: bullets,
-      ammo: player.ammo,
-    };
+    return { playerId: socketId, bullets, ammo: player.ammo };
   }
 
   handleReload(socketId) {
@@ -150,10 +168,12 @@ class GameManager {
     const player = this.players.get(socketId);
     if (!player || !player.isAlive || !config.WEAPONS[weaponType]) return;
 
+    const weaponConfig = config.WEAPONS[weaponType];
     player.weapon = weaponType;
-    player.ammo = config.WEAPONS[weaponType].magazineSize;
-    player.maxAmmo = config.WEAPONS[weaponType].magazineSize;
+    player.ammo = weaponConfig.magazineSize;
+    player.maxAmmo = weaponConfig.magazineSize;
     player.isReloading = false;
+    player.weaponRange = weaponConfig.range; // Update weapon range dynamically
   }
 
   update(deltaTime) {
@@ -161,8 +181,8 @@ class GameManager {
     const zoneDeaths = this.checkSafeZone();
 
     const allHits = [];
-    if (hits && hits.length > 0) allHits.push(...hits);
-    if (zoneDeaths && zoneDeaths.length > 0) {
+    if (hits) allHits.push(...hits);
+    if (zoneDeaths) {
       zoneDeaths.forEach(death => {
         allHits.push({
           targetId: death.victimId,
@@ -177,7 +197,7 @@ class GameManager {
 
     return {
       gameState: this.getGameState(),
-      hits: allHits.length > 0 ? allHits : null,
+      hits: allHits.length ? allHits : null,
     };
   }
 
@@ -195,10 +215,8 @@ class GameManager {
       ) * dt;
 
       if (
-        bullet.x < 0 ||
-        bullet.x > config.MAP_SIZE ||
-        bullet.y < 0 ||
-        bullet.y > config.MAP_SIZE ||
+        bullet.x < 0 || bullet.x > config.MAP_SIZE ||
+        bullet.y < 0 || bullet.y > config.MAP_SIZE ||
         bullet.distanceTraveled > bullet.range
       ) {
         this.bullets.splice(i, 1);
@@ -210,27 +228,16 @@ class GameManager {
 
         const dx = player.x - bullet.x;
         const dy = player.y - bullet.y;
-        const distance = Math.sqrt(dx * dx + dy * dy);
 
-        if (distance < 20) {
-          const hitResult = this.handleHit(socketId, bullet);
-          if (hitResult) {
-            hits.push({
-              targetId: socketId,
-              killed: hitResult.killed,
-              killerId: hitResult.killerId,
-              killerName: hitResult.killerName,
-              victimId: hitResult.victimId,
-              victimName: hitResult.victimName,
-            });
-          }
+        if (Math.sqrt(dx * dx + dy * dy) < 20) {
+          const hit = this.handleHit(socketId, bullet);
+          if (hit) hits.push({ targetId: socketId, ...hit });
           this.bullets.splice(i, 1);
           break;
         }
       }
     }
-
-    return hits.length > 0 ? hits : null;
+    return hits;
   }
 
   handleHit(targetSocketId, bullet) {
@@ -249,18 +256,13 @@ class GameManager {
 
     target.health -= damage;
 
-    if (attacker) {
-      attacker.damage += damage;
-    }
+    if (attacker) attacker.damage += damage;
 
     if (target.health <= 0) {
       target.health = 0;
       target.isAlive = false;
       this.playersAlive--;
-
-      if (attacker) {
-        attacker.kills++;
-      }
+      if (attacker) attacker.kills++;
 
       return {
         killed: true,
@@ -320,7 +322,6 @@ class GameManager {
 
       if (distance > this.safeZone.radius) {
         player.health -= config.SAFE_ZONE_DAMAGE;
-
         if (player.health <= 0) {
           player.health = 0;
           player.isAlive = false;
@@ -334,7 +335,7 @@ class GameManager {
       }
     }
 
-    return damages.length > 0 ? damages : null;
+    return damages.length ? damages : null;
   }
 
   startSafeZoneShrink() {
@@ -366,6 +367,7 @@ class GameManager {
       safeZone: this.safeZone,
       nextSafeZone: this.nextSafeZone,
       playersAlive: this.playersAlive,
+      healthKits: this.healthKits, // ⭐ ADDED
     };
   }
 
@@ -391,7 +393,6 @@ class GameManager {
         };
       }
     }
-
     return null;
   }
 
@@ -399,6 +400,7 @@ class GameManager {
     this.isActive = true;
     this.startTime = Date.now();
     this.startSafeZoneShrink();
+    this.spawnHealthKits(); // ⭐ ADDED
   }
 }
 
